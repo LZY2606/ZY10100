@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pair-wise GSB · 分割掩膜多来源对账</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <h1>Pair-wise GSB</h1>
+  <div class="meta">
+    <span>规则版本 <code id="ruleVersion">—</code></span>
+    <span>数据版本 <code id="dataVersion">—</code></span>
+    <label>用户 <input id="actor" maxlength="40" placeholder="researcher-a"></label>
+    <button id="refreshBtn">刷新</button>
+  </div>
+</header>
+
+<main>
+  <aside id="leftPanel">
+    <section id="imagesSection">
+      <h2>图像工作区</h2>
+      <ul id="imageList" class="list"></ul>
+      <details>
+        <summary>新建图像工作区</summary>
+        <form id="createImageForm">
+          <input name="imageId" placeholder="图像 ID（可选）">
+          <input name="name" placeholder="名称（可选）">
+          <label>PNG 图像 <input name="file" type="file" accept="image/png" required></label>
+          <div class="grid2">
+            <label>宽 <input name="width" type="number" required></label>
+            <label>高 <input name="height" type="number" required></label>
+            <label>方向(0/90/180/270) <input name="orientation" value="0"></label>
+            <label>像素间距 <input name="spacing" value="1"></label>
+          </div>
+          <p class="hint">先在浏览器内计算原始 PNG 的 SHA-256 指纹，服务端会重新计算并强制比对；宽高一致也不能放行。</p>
+          <button type="submit">创建并上传（带指纹）</button>
+          <div class="formMsg"></div>
+        </form>
+      </details>
+      <details>
+        <summary>导入导出包</summary>
+        <form id="importForm">
+          <input name="imageId" placeholder="新工作区 ID（可选）">
+          <label>导出 ZIP <input name="file" type="file" accept=".zip" required></label>
+          <button type="submit">校验并导入</button>
+          <div class="formMsg"></div>
+        </form>
+      </details>
+    </section>
+
+    <section id="sourcesSection" class="hidden">
+      <h2>来源与词表</h2>
+      <p class="hint">每个来源保留独立像素坐标系、类别表、置信度与图像指纹。</p>
+      <details>
+        <summary>导入类别词表</summary>
+        <form id="vocabForm">
+          <div class="grid2">
+            <input name="vocabularyId" placeholder="词表 ID" required>
+            <input name="version" placeholder="版本，如 v2" required>
+          </div>
+          <textarea name="categories" rows="4" placeholder='每行: 标签ID,名称  例如&#10;1,tumor&#10;2,stroma' required></textarea>
+          <button type="submit">导入词表</button>
+          <div class="formMsg"></div>
+        </form>
+      </details>
+      <details>
+        <summary>注册来源</summary>
+        <form id="sourceForm">
+          <div class="grid2">
+            <input name="sourceId" placeholder="来源 ID（可选）">
+            <input name="name" placeholder="名称">
+          </div>
+          <select name="kind"><option value="algorithm">算法</option><option value="human">人工修订</option></select>
+          <button type="submit">注册</button>
+          <div class="formMsg"></div>
+        </form>
+      </details>
+      <details>
+        <summary>上传来源掩膜版本</summary>
+        <form id="versionForm">
+          <select name="sourceId" required></select>
+          <div class="grid2">
+            <select name="vocabId" required></select>
+            <select name="vocabVersion" required></select>
+          </div>
+          <div class="grid2">
+            <label>原生宽 <input name="nativeWidth" type="number" required></label>
+            <label>原生高 <input name="nativeHeight" type="number" required></label>
+            <label>方向 <input name="orientation" value="0"></label>
+            <label>间距 <input name="spacingX" value="1"></label>
+          </div>
+          <label>格式
+            <select name="maskFormat"><option value="mrle1">MRLE1（应用压缩格式）</option>
+            <option value="png">PNG 调色板（可选互换）</option></select>
+          </label>
+          <label><input type="checkbox" name="synthetic" id="syntheticToggle"> 使用演示栅格（在浏览器生成并计算指纹）</label>
+          <input name="file" type="file" accept=".mrle,.bin,image/png">
+          <button type="submit">校验并导入版本</button>
+          <div class="formMsg"></div>
+        </form>
+      </details>
+
+      <h3>阈值</h3>
+      <form id="thresholdForm" class="inline">
+        <input name="threshold" type="range" min="0" max="1" step="0.05" id="thresholdRange">
+        <span id="thresholdValue">0.00</span>
+        <button>应用</button>
+      </form>
+
+      <h3>来源列表</h3>
+      <ul id="sourceList" class="list"></ul>
+
+      <h3>类别映射（同名不同词表版本不会自动合并）</h3>
+      <ul id="mappingList" class="list"></ul>
+    </section>
+  </aside>
+
+  <section id="canvasSection" class="hidden">
+    <div id="toolbar">
+      <div class="group" id="layerGroup">
+        <label><input type="radio" name="layer" value="base"> 底图</label>
+        <label><input type="radio" name="layer" value="consensus" checked> 共识</label>
+        <label><input type="radio" name="layer" value="disagree"> 仅分歧</label>
+        <span id="sourceLayerButtons"></span>
+      </div>
+      <div class="group" id="toolGroup">
+        <label><input type="radio" name="tool" value="pan" checked> 平移</label>
+        <label><input type="radio" name="tool" value="draw"> 绘制区域</label>
+      </div>
+      <div class="group" id="actionGroup" class="hidden">
+        <select id="decisionKind">
+          <option value="PENDING">置为未决</option>
+          <option value="ACCEPT">接受来源</option>
+          <option value="CORRECT">绘制修正</option>
+        </select>
+        <select id="acceptSource"></select>
+        <select id="correctLabel"></select>
+        <button id="clearPolygon">清除</button>
+        <button id="submitDecision" class="primary">提交区域决定</button>
+      </div>
+      <div class="group">
+        <button id="zoomOut">−</button>
+        <span id="zoomLabel">z?</span>
+        <button id="zoomIn">+</button>
+        <button id="fitBtn">适配</button>
+      </div>
+    </div>
+    <div id="viewport"><canvas id="map"></canvas></div>
+    <div id="conflictBanner" class="hidden"></div>
+    <div id="statusBar">
+      <span id="summary"></span>
+      <a id="exportLink" href="#">导出版本（ZIP）</a>
+      <button id="releaseBtn" class="primary">生成发布版本</button>
+    </div>
+  </section>
+
+  <aside id="rightPanel" class="hidden">
+    <section>
+      <h2>区域</h2>
+      <ul id="regionList" class="list regions"></ul>
+    </section>
+    <section>
+      <h2>决定历史</h2>
+      <p class="hint">共识层只引用来源与修正事件；撤销产生反向事件，不删除旧记录。</p>
+      <ul id="decisionList" class="list"></ul>
+    </section>
+    <section>
+      <h2>发布版本</h2>
+      <ul id="releaseList" class="list"></ul>
+    </section>
+  </aside>
+</main>
+
+<div id="toast"></div>
+<script src="/core.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
