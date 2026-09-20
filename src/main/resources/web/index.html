@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>GSB 多来源分割掩膜共识台</title>
+<style>
+  :root { --bg:#0f1420; --panel:#171e2e; --line:#27324a; --text:#e7ecf6;
+          --muted:#93a0b8; --accent:#4f8cff; --good:#2fbf71; --bad:#ff5a52; --warn:#ffc043; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 -apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:14px; padding:10px 16px;
+           background:linear-gradient(180deg,#1a2336,#131a29); border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; letter-spacing:.5px; }
+  header .sp { flex:1; }
+  button,select,input { font:inherit; color:var(--text); background:#101625;
+          border:1px solid var(--line); border-radius:7px; padding:6px 10px; }
+  button { cursor:pointer; background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.ghost { background:transparent; color:var(--text); border-color:var(--line); }
+  button.danger { background:var(--bad); border-color:var(--bad); }
+  main { display:grid; grid-template-columns:330px 1fr 320px; gap:0; height:calc(100vh - 49px); }
+  .col { overflow:auto; padding:14px; border-right:1px solid var(--line); background:var(--panel); }
+  .col:last-child { border-right:none; }
+  .card { border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:12px; background:#121a2b; }
+  .card h2 { font-size:13px; margin:0 0 10px; color:#cdd8ef; text-transform:uppercase; letter-spacing:.6px; }
+  .row { display:flex; gap:8px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+  .muted { color:var(--muted); font-size:12px; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px; border:1px solid var(--line); }
+  .pill.good { color:var(--good); border-color:#245a3d; }
+  .pill.bad { color:var(--bad); border-color:#5d2c2a; }
+  .pill.warn { color:var(--warn); border-color:#5e4d22; }
+  #viewport { position:relative; background:#0a0e18; overflow:hidden; }
+  #canvas { position:absolute; image-rendering:pixelated; transform-origin:0 0; }
+  #drawLayer { position:absolute; transform-origin:0 0; pointer-events:none; }
+  #map { position:absolute; right:12px; bottom:12px; width:210px; background:#0c1322;
+         border:1px solid var(--line); border-radius:10px; padding:10px; }
+  #map canvas { width:100%; image-rendering:pixelated; background:#05070d; border-radius:6px; display:block; }
+  ul { list-style:none; margin:0; padding:0; }
+  li.item { padding:8px; border:1px solid var(--line); border-radius:8px; margin-bottom:7px; background:#0e1626; }
+  li.item .meta { font-size:11px; color:var(--muted); word-break:break-all; }
+  .toast { position:fixed; left:50%; top:56px; transform:translateX(-50%); z-index:50;
+           background:#08101f; border:1px solid var(--line); border-radius:9px; padding:10px 14px;
+           max-width:640px; display:none; box-shadow:0 10px 30px #0009; }
+  .toast.bad { border-color:#5d2c2a; } .toast.good{border-color:#245a3d;} .toast.warn{border-color:#5e4d22;}
+  .legend span { display:inline-flex; gap:6px; align-items:center; margin-right:10px; font-size:12px; }
+  .swatch { width:11px; height:11px; border-radius:3px; display:inline-block; }
+  label.chk { display:flex; gap:7px; align-items:center; font-size:12px; color:var(--muted); }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:12px;
+           width:min(640px,92vw); padding:0; }
+  dialog::backdrop { background:#000a; }
+  dialog .hd { padding:14px 16px; border-bottom:1px solid var(--line); font-weight:600; }
+  dialog .bd { padding:14px 16px; max-height:60vh; overflow:auto; }
+  dialog .ft { padding:12px 16px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end; }
+  pre.diag { white-space:pre-wrap; background:#0a0f1c; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:12px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .tag { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; color:#9fd0ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🩻 GSB 分割掩膜共识台</h1>
+  <select id="workspaceSelect"></select>
+  <button class="ghost" id="refreshBtn">刷新</button>
+  <span class="sp"></span>
+  <span id="versionTag" class="pill">v0</span>
+  <button class="ghost" id="exportBtn">导出</button>
+  <button id="releaseBtn">发布版本</button>
+</header>
+<main>
+  <section class="col">
+    <div class="card">
+      <h2>工作区</h2>
+      <div id="wsMeta" class="muted">未选择</div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" id="newWsBtn">新建工作区</button>
+        <label class="chk"><input type="file" id="importFile" accept=".zip"/>再导入 ZIP</label>
+      </div>
+      <div id="recoveryNote"></div>
+    </div>
+    <div class="card">
+      <h2>导入来源掩膜</h2>
+      <div class="row"><label>算法</label><input id="inAlgo" value="algo-a" style="width:120px"/></div>
+      <div class="row"><label>词表</label><input id="inVocab" value="vocab-1" style="width:120px"/>
+        <label class="chk"><input type="checkbox" id="inResample"/>允许重采样</label></div>
+      <div class="row"><label>图像指纹</label><input id="inFinger" style="width:200px" placeholder="sha256"/></div>
+      <div class="muted">演示：用生成器造两张可比较的掩膜（也可改指纹验证拦截）。</div>
+      <div class="grid2" style="margin-top:8px">
+        <button id="genA">生成来源 A</button>
+        <button id="genB">生成来源 B</button>
+        <button class="ghost" id="genA2">A 算法更新</button>
+        <button class="ghost" id="genWrong">错误指纹(应拒绝)</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>来源</h2>
+      <ul id="sourceList"></ul>
+    </div>
+    <div class="card">
+      <h2>类别映射（发布前须确认）</h2>
+      <ul id="mappingList"></ul>
+    </div>
+  </section>
+
+  <section id="viewport">
+    <canvas id="canvas"></canvas>
+    <canvas id="drawLayer"></canvas>
+    <div id="map">
+      <div class="muted" style="margin-bottom:6px">叠加层 · <span id="modeName">来源 A</span></div>
+      <canvas id="mapCanvas" width="210" height="150"></canvas>
+      <div class="row" style="margin:8px 0 4px">
+        <select id="layerSelect">
+          <option value="auto">自动（A/B）</option>
+          <option value="consensus">共识层</option>
+        </select>
+        <select id="sourceSelect"></select>
+      </div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="cmpLayer"/>显示比较层</label>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div class="row">
+        <button class="ghost" id="zoomOut">−</button>
+        <button class="ghost" id="zoomIn">＋</button>
+        <button class="ghost" id="fitBtn">适配</button>
+        <label class="chk"><input type="checkbox" id="drawToggle"/>绘制修正</label>
+      </div>
+      <div class="row">
+        <select id="drawAction">
+          <option value="CORRECTION">修正为类别</option>
+          <option value="ACCEPT_SOURCE">接受某来源</option>
+          <option value="PENDING">置为未决</option>
+        </select>
+      </div>
+      <div class="row"><input id="classKey" value="class:tumor" style="width:180px" placeholder="canonicalKey"/></div>
+      <div class="row"><input id="authorName" value="alice" style="width:120px" placeholder="用户名"/>
+        <span class="muted">并发基于 baseVersion</span></div>
+    </div>
+  </section>
+
+  <section class="col">
+    <div class="card">
+      <h2>比较参数</h2>
+      <div class="row"><label>置信度阈值</label>
+        <input id="threshold" type="number" step="0.05" min="0" max="1" value="0.0" style="width:90px"/></div>
+      <div class="row"><label class="chk"><input type="checkbox" id="quarantine" checked/>隔离重采样边界像素</label></div>
+      <button id="compareBtn">计算一致 / 分歧 / 未覆盖</button>
+      <div id="cmpStats" class="muted" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>区域决定</h2>
+      <ul id="decisionList"></ul>
+    </div>
+    <div class="card">
+      <h2>发布门控</h2>
+      <div id="gateBox" class="muted">尚未评估</div>
+    </div>
+    <div class="card">
+      <h2>决定历史（事件溯源）</h2>
+      <ul id="eventList" class="meta"></ul>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<dialog id="conflictDlg">
+  <div class="hd">⚠️ 并发编辑冲突</div>
+  <div class="bd">
+    <div id="conflictText" class="muted"></div>
+    <pre class="diag" id="conflictDiag"></pre>
+    <div class="muted">非重叠片段已自动合入。可查看冲突多边形，调整后重新提交（已用最新版本）。</div>
+  </div>
+  <div class="ft">
+    <button class="ghost" id="conflictClose">知道了</button>
+    <button id="conflictResubmit">仅重提非冲突区域</button>
+  </div>
+</dialog>
+
+<dialog id="newWsDlg">
+  <div class="hd">新建工作区</div>
+  <div class="bd">
+    <div class="row"><label>ID</label><input id="nwId" value="ws-demo"/></div>
+    <div class="row"><label>名称</label><input id="nwName" value="演示工作区"/></div>
+    <div class="row"><label>指纹</label><input id="nwFinger" style="width:260px"/></div>
+    <div class="grid2">
+      <div class="row"><label>宽</label><input id="nwW" type="number" value="8"/></div>
+      <div class="row"><label>高</label><input id="nwH" type="number" value="6"/></div>
+    </div>
+  </div>
+  <div class="ft"><button class="ghost" id="nwCancel">取消</button><button id="nwCreate">创建</button></div>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>
